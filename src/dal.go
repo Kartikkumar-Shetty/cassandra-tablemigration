@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 
@@ -29,15 +28,41 @@ func createSession(clusterIPs []string, keyspace string) (*gocql.Session, error)
 	return session, nil
 }
 
-func getPartitionKeys(nameSpaceName string, tableName string, colName string) ([]map[string]interface{}, error) {
+func getPartitionKeys(nameSpaceName string, tableName string, colName string) ([]column, error) {
 	query := fmt.Sprintf(`SELECT distinct "%s" FROM %s.%s where TOKEN("%s") >= -9223372036854775808 AND TOKEN("%s")  <= 9223372036854775807`, colName, nameSpaceName, tableName, colName, colName)
-	return executeQuery(session, query)
+	data, err := executeQuery(session, query)
+	if err != nil {
+		return nil, err
+	}
+	columns := translateData(data)
+	return columns, nil
 }
 
-func getColumnMetadata(nameSpaceName string, tableName string) ([]map[string]interface{}, error) {
+func getColumnMetadata(nameSpaceName string, tableName string) ([]column, error) {
 	query := fmt.Sprintf(`SELECT * FROM system_schema.columns where keyspace_name='%s' and table_name = '%s'`, nameSpaceName, tableName)
-	return executeQuery(session, query)
+	data, err := executeQuery(session, query)
+	if err != nil {
+		return nil, err
+	}
 
+	columns := translateData(data)
+	return columns, nil
+
+}
+
+func translateData(data []map[string]interface{}) []column {
+	var columns []column
+	for i := 0; i < len(data); i++ {
+		col := column{
+			Name:            data[i]["column_name"].(string),
+			ClusterSequence: data[i]["position"].(int),
+			Datatype:        data[i]["type"].(string),
+			Kind:            data[i]["kind"].(string),
+		}
+
+		columns = append(columns, col)
+	}
+	return columns
 }
 
 func executeQuery(session *gocql.Session, query string) ([]map[string]interface{}, error) {
@@ -47,25 +72,24 @@ func executeQuery(session *gocql.Session, query string) ([]map[string]interface{
 
 }
 
-func getPartitionColumn(data []map[string]interface{}) (string, error) {
-	for _, value := range data {
-		if value["kind"] == "partition_key" {
-			key := value["column_name"].(string)
-			return key, nil
+func getPartitionColumn(columns []column) []column {
+	var pcolumns []column
+	for _, value := range columns {
+		if value.Kind == "partition_key" {
+			pcolumns = append(pcolumns, value)
 		}
 	}
-	return "", errors.New("No Partition key exists")
+	return pcolumns
 }
 
-func getClusterColumn(data []map[string]interface{}) map[int]string {
-	clusteringColumns := make(map[int]string)
-	for _, value := range data {
-		if value["kind"] == "clustering" && value["position"] != "-1" {
-			pos := value["position"].(int)
-			clusteringColumns[pos] = value["column_name"].(string)
+func getClusterColumn(columns []column) []column {
+	var clcolumns []column
+	for _, value := range columns {
+		if value.Kind == "clustering" {
+			clcolumns = append(clcolumns, value)
 		}
 	}
-	return clusteringColumns
+	return clcolumns
 }
 
 func readConf(tableConfigPath string) (*tableConfig, error) {

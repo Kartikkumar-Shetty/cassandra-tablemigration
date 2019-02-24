@@ -7,9 +7,9 @@ type tableConfig struct {
 	ColumnMapping                map[string]string
 }
 
-type oolumn struct {
-	Name         string
-	ClusterOrder int
-	ParitionKey  bool
-	Datatype     string
+type column struct {
+	Name            string
+	ClusterSequence int
+	Kind            string
+	Datatype        string
 }
