@@ -1,5 +1,7 @@
 {
     "SourceTable":"testtable1",
+    "SourceKeySpace":"",
+    "DestinationKeySpace":"",
     "DestinationTable":"testtable2",
     "ColumnMapping":{
 	"id":"id2",
