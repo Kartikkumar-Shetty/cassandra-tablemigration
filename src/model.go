@@ -1,10 +1,15 @@
 package main
 
 type tableConfig struct {
-	SourceTable                  string
-	DestinationTable             string
-	DestinationTablePartitionkey string
-	ColumnMapping                map[string]string
+	SourceTable      string
+	DestinationTable string
+	ColumnMapping    map[string]string
+}
+
+type partitionValues struct {
+	ColumnName string
+	Values     []interface{}
+	Datatype   string
 }
 
 type column struct {

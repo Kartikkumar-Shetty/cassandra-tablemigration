@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 
 	"github.com/gocql/gocql"
 )
@@ -28,14 +29,16 @@ func createSession(clusterIPs []string, keyspace string) (*gocql.Session, error)
 	return session, nil
 }
 
-func getPartitionKeys(nameSpaceName string, tableName string, colName string) ([]column, error) {
-	query := fmt.Sprintf(`SELECT distinct "%s" FROM %s.%s where TOKEN("%s") >= -9223372036854775808 AND TOKEN("%s")  <= 9223372036854775807`, colName, nameSpaceName, tableName, colName, colName)
+func getPartitionKeys(nameSpaceName string, tableName string, col column) ([]map[string]interface{}, error) {
+	query := fmt.Sprintf(`SELECT distinct "%s" FROM %s.%s where TOKEN("%s") >= -9223372036854775808 AND TOKEN("%s")  <= 9223372036854775807`, col.Name, nameSpaceName, tableName, col.Name, col.Name)
+	log.Println("getPartitionKeys: Fetching partition key")
 	data, err := executeQuery(session, query)
 	if err != nil {
+		log.Println("getPartitionKeys: Error: ", err)
 		return nil, err
 	}
-	columns := translateData(data)
-	return columns, nil
+	log.Println("getPartitionKeys: Partition Data: ", data)
+	return data, nil
 }
 
 func getColumnMetadata(nameSpaceName string, tableName string) ([]column, error) {
@@ -54,15 +57,71 @@ func translateData(data []map[string]interface{}) []column {
 	var columns []column
 	for i := 0; i < len(data); i++ {
 		col := column{
-			Name:            data[i]["column_name"].(string),
-			ClusterSequence: data[i]["position"].(int),
-			Datatype:        data[i]["type"].(string),
-			Kind:            data[i]["kind"].(string),
+			Name:            ToString(data[i]["column_name"]),
+			ClusterSequence: ToInt(data[i]["position"]),
+			Datatype:        ToString(data[i]["type"]),
+			Kind:            ToString(data[i]["kind"]),
 		}
 
 		columns = append(columns, col)
 	}
 	return columns
+}
+
+func createSourceTableQuery(config tableConfig, partitionColumns []column) string {
+	tablePart := fmt.Sprintf(" from %s ", config.SourceTable)
+	selectPart := ""
+	wherePart := ""
+	for colName, _ := range config.ColumnMapping {
+		for _, pcol := range partitionColumns {
+			if pcol.Name == colName {
+				continue
+			}
+		}
+		if selectPart != "" {
+			selectPart = fmt.Sprintf("%s, %s", selectPart, colName)
+			continue
+		}
+		selectPart = fmt.Sprintf("select %s", colName)
+	}
+	for _, pcol := range partitionColumns {
+		if wherePart != "" {
+			wherePart = fmt.Sprintf(" and %s = ? ,", pcol.Name)
+			continue
+		}
+		wherePart = fmt.Sprintf(" where %s = ?", pcol.Name)
+
+	}
+	query := fmt.Sprintf("%s %s %s", selectPart, tablePart, wherePart)
+	return query
+}
+
+func createDestinationTableQuery(config tableConfig, partitionColumns []column) string {
+	tablePart := fmt.Sprintf("update table %s set", config.DestinationTable)
+	updatePart := ""
+	wherePart := ""
+	for _, colName := range config.ColumnMapping {
+		for _, pcol := range partitionColumns {
+			if pcol.Name == colName {
+				continue
+			}
+		}
+		if updatePart != "" {
+			updatePart = fmt.Sprintf("%s, %s = ?", updatePart, colName)
+			continue
+		}
+		updatePart = fmt.Sprintf(" %s = ?", colName)
+	}
+	for _, pcol := range partitionColumns {
+		if wherePart != "" {
+			wherePart = fmt.Sprintf(" and %s = ? ,", pcol.Name)
+			continue
+		}
+		wherePart = fmt.Sprintf(" where %s = ?", pcol.Name)
+
+	}
+	query := fmt.Sprintf("%s %s %s", tablePart, updatePart, wherePart)
+	return query
 }
 
 func executeQuery(session *gocql.Session, query string) ([]map[string]interface{}, error) {
@@ -92,12 +151,12 @@ func getClusterColumn(columns []column) []column {
 	return clcolumns
 }
 
-func readConf(tableConfigPath string) (*tableConfig, error) {
+func readConf(tableConfigPath string) (tableConfig, error) {
 	cfg := tableConfig{}
 	fileData, err := ioutil.ReadFile(tableConfigPath)
 	if err != nil {
-		return nil, err
+		return cfg, err
 	}
 	err = json.Unmarshal(fileData, &cfg)
-	return &cfg, err
+	return cfg, err
 }
