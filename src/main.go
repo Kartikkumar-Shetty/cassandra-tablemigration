@@ -29,12 +29,13 @@ func main() {
 	log.Println("Executable Path:", path)
 	log.Println("Config :", config)
 
-	clusterIPs := []string{"127.0.0.1"}
-	sourceKeySpace := ""
-	sourceTable := "testtable1"
+	ips := config.ClusterIPs
+	clusterIPs := []string{ips}
+	sourceKeySpace := config.SourceKeySpace
+	sourceTable := config.SourceTable
 
-	destKeySpace := ""
-	destTable := "testtable2"
+	destKeySpace := config.DestinationKeySpace
+	destTable := config.DestinationTable
 
 	log.Println("Cluster IP's: ", clusterIPs)
 
@@ -45,7 +46,7 @@ func main() {
 	}
 	defer session.Close()
 
-	log.Println("Fetching table")
+	log.Println("Fetching table Metadata")
 	sourceTableMetadata, err := getColumnMetadata(sourceKeySpace, sourceTable)
 	if err != nil {
 		log.Println("Error fetching Source Table metadata: Error", err)
@@ -84,10 +85,22 @@ func main() {
 	destUpdateQuery := createDestinationTableQuery(config, destTablePartitionColumns)
 	log.Println(destUpdateQuery)
 
-	// partitionKeyData, err := getPartitionKeys(sourceKeySpace, sourceTable, partitionColumns[0])
-	// if err != nil {
-	// 	log.Println("getPartitionKeys, Error:", err)
-	// }
-	// log.Println("List of keys in the Table: ", sourceTable, ", for Column: ", partitionColumns, " ,are :", partitionKeyData)
+	log.Println("Fetching Partition Columns keys  for the source Table")
+	partitionKeyData, err := getPartitionKeys(sourceKeySpace, sourceTable, sourceTablePartitionColumns[0])
+	if err != nil {
+		log.Println("getPartitionKeys, Error:", err)
+	}
+	log.Println("List of keys in the Table: ", sourceTable, ", for Column: ", sourceTablePartitionColumns[0], " ,are :", partitionKeyData)
+
+	log.Println("Fetching source Table Data")
+
+	for _, value := range partitionKeyData {
+		data, err := getSourceTableData(session, sourceSelectQuery, sourceTablePartitionColumns[0], value[sourceTablePartitionColumns[0].Name])
+		if err != nil {
+			log.Println("Error Fetching Data Error:", err)
+			return
+		}
+		log.Println("Data:", data)
+	}
 
 }

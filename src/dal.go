@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"strings"
 
 	"github.com/gocql/gocql"
 )
@@ -69,7 +70,7 @@ func translateData(data []map[string]interface{}) []column {
 }
 
 func createSourceTableQuery(config tableConfig, partitionColumns []column) string {
-	tablePart := fmt.Sprintf(" from %s ", config.SourceTable)
+	tablePart := fmt.Sprintf(" from %s.%s ", config.SourceKeySpace, config.SourceTable)
 	selectPart := ""
 	wherePart := ""
 	for colName, _ := range config.ColumnMapping {
@@ -86,10 +87,10 @@ func createSourceTableQuery(config tableConfig, partitionColumns []column) strin
 	}
 	for _, pcol := range partitionColumns {
 		if wherePart != "" {
-			wherePart = fmt.Sprintf(" and %s = ? ,", pcol.Name)
+			wherePart = fmt.Sprintf(" and %s = $%s ,", pcol.Name, pcol.Name)
 			continue
 		}
-		wherePart = fmt.Sprintf(" where %s = ?", pcol.Name)
+		wherePart = fmt.Sprintf(" where %s = $%s", pcol.Name, pcol.Name)
 
 	}
 	query := fmt.Sprintf("%s %s %s", selectPart, tablePart, wherePart)
@@ -97,31 +98,56 @@ func createSourceTableQuery(config tableConfig, partitionColumns []column) strin
 }
 
 func createDestinationTableQuery(config tableConfig, partitionColumns []column) string {
-	tablePart := fmt.Sprintf("update table %s set", config.DestinationTable)
+	tablePart := fmt.Sprintf("update table %s.%s set", config.DestinationKeySpace, config.DestinationTable)
 	updatePart := ""
 	wherePart := ""
 	for _, colName := range config.ColumnMapping {
+		isPartitionKey := false
 		for _, pcol := range partitionColumns {
 			if pcol.Name == colName {
-				continue
+				isPartitionKey = true
+				break
 			}
 		}
+		if isPartitionKey {
+			continue
+		}
+
 		if updatePart != "" {
-			updatePart = fmt.Sprintf("%s, %s = ?", updatePart, colName)
+			updatePart = fmt.Sprintf("%s, %s = $%s", updatePart, colName, colName)
 			continue
 		}
 		updatePart = fmt.Sprintf(" %s = ?", colName)
 	}
 	for _, pcol := range partitionColumns {
 		if wherePart != "" {
-			wherePart = fmt.Sprintf(" and %s = ? ,", pcol.Name)
+			wherePart = fmt.Sprintf(" and %s = $%s ,", pcol.Name, pcol.Name)
 			continue
 		}
-		wherePart = fmt.Sprintf(" where %s = ?", pcol.Name)
+		wherePart = fmt.Sprintf(" where %s = $%s", pcol.Name, pcol.Name)
 
 	}
 	query := fmt.Sprintf("%s %s %s", tablePart, updatePart, wherePart)
 	return query
+}
+
+func getSourceTableData(session *gocql.Session, selectQuery string, partCol column, partitionValue interface{}) ([]map[string]interface{}, error) {
+	finalQuery := ""
+	switch t := partitionValue.(type) {
+	case int, float64, bool:
+		finalQuery = strings.Replace(selectQuery, fmt.Sprint("$", partCol.Name), fmt.Sprint(partitionValue.(int)), -1)
+	case string:
+		finalQuery = strings.Replace(selectQuery, fmt.Sprint("$", partCol.Name), fmt.Sprint("'", partitionValue.(string), "'"), -1)
+	default:
+		return nil, fmt.Errorf("Unkown DataType for Partition Column, Data: %v", t)
+	}
+
+	return executeQuery(session, finalQuery)
+
+}
+
+func insertDestData(session *gocql.Session, insertQuery string, data []map[string]interface{}, paramCount int) {
+
 }
 
 func executeQuery(session *gocql.Session, query string) ([]map[string]interface{}, error) {
@@ -130,6 +156,10 @@ func executeQuery(session *gocql.Session, query string) ([]map[string]interface{
 	return q.Iter().SliceMap()
 
 }
+
+// func insertQuery(session *gocql.Session, query string) ([]map[string]interface{}, error) {
+
+// }
 
 func getPartitionColumn(columns []column) []column {
 	var pcolumns []column

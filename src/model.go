@@ -1,9 +1,12 @@
 package main
 
 type tableConfig struct {
-	SourceTable      string
-	DestinationTable string
-	ColumnMapping    map[string]string
+	ClusterIPs          string
+	SourceTable         string
+	DestinationTable    string
+	SourceKeySpace      string
+	DestinationKeySpace string
+	ColumnMapping       map[string]string
 }
 
 type partitionValues struct {
