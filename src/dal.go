@@ -73,81 +73,121 @@ func createSourceTableQuery(config tableConfig, partitionColumns []column) strin
 	tablePart := fmt.Sprintf(" from %s.%s ", config.SourceKeySpace, config.SourceTable)
 	selectPart := ""
 	wherePart := ""
+
 	for colName, _ := range config.ColumnMapping {
 		for _, pcol := range partitionColumns {
 			if pcol.Name == colName {
-				continue
+				if wherePart != "" {
+					wherePart = fmt.Sprintf(" and %s = $%s ,", pcol.Name, colName)
+
+				}
+				wherePart = fmt.Sprintf(" where %s = $%s", pcol.Name, colName)
 			}
 		}
+
 		if selectPart != "" {
 			selectPart = fmt.Sprintf("%s, %s", selectPart, colName)
 			continue
 		}
 		selectPart = fmt.Sprintf("select %s", colName)
 	}
-	for _, pcol := range partitionColumns {
-		if wherePart != "" {
-			wherePart = fmt.Sprintf(" and %s = $%s ,", pcol.Name, pcol.Name)
-			continue
-		}
-		wherePart = fmt.Sprintf(" where %s = $%s", pcol.Name, pcol.Name)
 
-	}
 	query := fmt.Sprintf("%s %s %s", selectPart, tablePart, wherePart)
 	return query
 }
 
 func createDestinationTableQuery(config tableConfig, partitionColumns []column) string {
-	tablePart := fmt.Sprintf("update table %s.%s set", config.DestinationKeySpace, config.DestinationTable)
+	tablePart := fmt.Sprintf("update %s.%s set", config.DestinationKeySpace, config.DestinationTable)
 	updatePart := ""
 	wherePart := ""
-	for _, colName := range config.ColumnMapping {
-		isPartitionKey := false
+
+	for sourceColName, colName := range config.ColumnMapping {
+		tocontinue := false
 		for _, pcol := range partitionColumns {
+			tocontinue = false
 			if pcol.Name == colName {
-				isPartitionKey = true
+				if wherePart != "" {
+					wherePart = fmt.Sprintf(" and %s = $%s ,", pcol.Name, sourceColName)
+					tocontinue = true
+					break
+				}
+				wherePart = fmt.Sprintf(" where %s = $%s", pcol.Name, sourceColName)
+				tocontinue = true
 				break
 			}
 		}
-		if isPartitionKey {
+		if tocontinue {
 			continue
 		}
 
 		if updatePart != "" {
-			updatePart = fmt.Sprintf("%s, %s = $%s", updatePart, colName, colName)
+			updatePart = fmt.Sprintf("%s, %s = $%s", updatePart, colName, sourceColName)
 			continue
 		}
-		updatePart = fmt.Sprintf(" %s = ?", colName)
+		updatePart = fmt.Sprintf(" %s = $%s", colName, sourceColName)
 	}
-	for _, pcol := range partitionColumns {
-		if wherePart != "" {
-			wherePart = fmt.Sprintf(" and %s = $%s ,", pcol.Name, pcol.Name)
-			continue
-		}
-		wherePart = fmt.Sprintf(" where %s = $%s", pcol.Name, pcol.Name)
+	// for _, pcol := range partitionColumns {
+	// 	if wherePart != "" {
+	// 		wherePart = fmt.Sprintf(" and %s = $%s ,", pcol.Name, pcol.Name)
+	// 		continue
+	// 	}
+	// 	wherePart = fmt.Sprintf(" where %s = $%s", pcol.Name, pcol.Name)
 
-	}
+	// }
 	query := fmt.Sprintf("%s %s %s", tablePart, updatePart, wherePart)
 	return query
 }
 
 func getSourceTableData(session *gocql.Session, selectQuery string, partCol column, partitionValue interface{}) ([]map[string]interface{}, error) {
-	finalQuery := ""
-	switch t := partitionValue.(type) {
-	case int, float64, bool:
-		finalQuery = strings.Replace(selectQuery, fmt.Sprint("$", partCol.Name), fmt.Sprint(partitionValue.(int)), -1)
-	case string:
-		finalQuery = strings.Replace(selectQuery, fmt.Sprint("$", partCol.Name), fmt.Sprint("'", partitionValue.(string), "'"), -1)
-	default:
-		return nil, fmt.Errorf("Unkown DataType for Partition Column, Data: %v", t)
+	finalQuery, err := replaceQueryColNames(selectQuery, partCol, partitionValue)
+	if err != nil {
+		return nil, err
 	}
+	// switch t := partitionValue.(type) {
+	// case int, float64, bool:
+	// 	finalQuery = strings.Replace(selectQuery, fmt.Sprint("$", partCol.Name), fmt.Sprint(partitionValue.(int)), -1)
+	// case string:
+	// 	finalQuery = strings.Replace(selectQuery, fmt.Sprint("$", partCol.Name), fmt.Sprint("'", partitionValue.(string), "'"), -1)
+	// default:
+	// 	return nil, fmt.Errorf("Unkown DataType for Partition Column, Data: %v", t)
+	// }
 
 	return executeQuery(session, finalQuery)
 
 }
 
-func insertDestData(session *gocql.Session, insertQuery string, data []map[string]interface{}, paramCount int) {
+func replaceQueryColNames(query string, col column, value interface{}) (string, error) {
+	finalQuery := ""
+	switch t := value.(type) {
+	case int, float64, bool:
+		finalQuery = strings.Replace(query, fmt.Sprint("$", col.Name), fmt.Sprint(value.(int)), -1)
+	case string:
+		finalQuery = strings.Replace(query, fmt.Sprint("$", col.Name), fmt.Sprint("'", value.(string), "'"), -1)
+	case nil:
+		finalQuery = strings.Replace(query, fmt.Sprint("$", col.Name), "nil", -1)
+	default:
+		return "", fmt.Errorf("Unkown DataType for Partition Column, Data: %v", t)
+	}
+	return finalQuery, nil
+}
 
+func insertDestData(session *gocql.Session, insertQuery string, data []map[string]interface{}, sourceTableCols []column) error {
+	var err error
+	finalQuery := ""
+	for _, v := range data {
+		finalQuery = insertQuery
+		for _, col := range sourceTableCols {
+			finalQuery, err = replaceQueryColNames(finalQuery, col, v[col.Name])
+			if err != nil {
+				return err
+			}
+		}
+		_, err = executeQuery(session, finalQuery)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func executeQuery(session *gocql.Session, query string) ([]map[string]interface{}, error) {

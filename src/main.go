@@ -94,13 +94,22 @@ func main() {
 
 	log.Println("Fetching source Table Data")
 
+	var data []map[string]interface{}
+
 	for _, value := range partitionKeyData {
-		data, err := getSourceTableData(session, sourceSelectQuery, sourceTablePartitionColumns[0], value[sourceTablePartitionColumns[0].Name])
+		var err error
+		data, err = getSourceTableData(session, sourceSelectQuery, sourceTablePartitionColumns[0], value[sourceTablePartitionColumns[0].Name])
 		if err != nil {
 			log.Println("Error Fetching Data Error:", err)
 			return
 		}
-		log.Println("Data:", data)
+		log.Println("Source table Data for Parition Key:", sourceTablePartitionColumns[0].Name, ", is:", data)
+
+		log.Println("Inserting the data to Detaination table")
+		err = insertDestData(session, destUpdateQuery, data, sourceTableMetadata)
+		if err != nil {
+			log.Println("Error Inserting Data Error:", err)
+		}
 	}
 
 }
