@@ -86,7 +86,7 @@ func main() {
 	log.Println(destUpdateQuery)
 
 	log.Println("Fetching Partition Columns keys  for the source Table")
-	partitionKeyData, err := getPartitionKeys(sourceKeySpace, sourceTable, sourceTablePartitionColumns[0])
+	partitionKeyData, err := getMultiColumnPartitionKeys(sourceKeySpace, sourceTable, sourceTablePartitionColumns)
 	if err != nil {
 		log.Println("getPartitionKeys, Error:", err)
 	}
@@ -98,18 +98,19 @@ func main() {
 
 	for _, value := range partitionKeyData {
 		var err error
-		data, err = getSourceTableData(session, sourceSelectQuery, sourceTablePartitionColumns[0], value[sourceTablePartitionColumns[0].Name])
+		data, err = getSourceTableData(session, sourceSelectQuery, sourceTablePartitionColumns, value)
 		if err != nil {
 			log.Println("Error Fetching Data Error:", err)
 			return
 		}
-		log.Println("Source table Data for Parition Key:", sourceTablePartitionColumns[0].Name, ", is:", data)
+		log.Println("Source table Data for Partition is:", data)
 
-		log.Println("Inserting the data to Detaination table")
+		log.Println("Inserting the data to Destination table")
 		err = insertDestData(session, destUpdateQuery, data, sourceTableMetadata)
 		if err != nil {
 			log.Println("Error Inserting Data Error:", err)
 		}
 	}
+	log.Println("Migration Successful")
 
 }

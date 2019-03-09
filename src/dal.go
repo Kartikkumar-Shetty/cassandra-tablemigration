@@ -39,11 +39,40 @@ func getPartitionKeys(nameSpaceName string, tableName string, col column) ([]map
 		return nil, err
 	}
 	log.Println("getPartitionKeys: Partition Data: ", data)
+	fmt.Println(query)
+	return data, nil
+}
+
+func getMultiColumnPartitionKeys(nameSpaceName string, tableName string, cols []column) ([]map[string]interface{}, error) {
+	colList := ""
+	wherePart := ""
+	for _, col := range cols {
+		if colList == "" {
+			colList = fmt.Sprintf(`"%s"`, col.Name)
+			continue
+		}
+		colList = fmt.Sprintf(`%s, "%s"`, colList, col.Name)
+	}
+	fmt.Println(colList)
+	selectQuery := fmt.Sprintf(`SELECT distinct %s FROM %s.%s `, colList, nameSpaceName, tableName)
+
+	wherePart = fmt.Sprintf(` where Token(%s)>= -9223372036854775808 and Token(%s) <= 9223372036854775807`, colList, colList)
+
+	finalQuery := fmt.Sprintf("%s %s", selectQuery, wherePart)
+	fmt.Println(finalQuery)
+	data, err := executeQuery(session, finalQuery)
+	if err != nil {
+		log.Println("getPartitionKeys: Error: ", err)
+		return nil, err
+	}
+	log.Println("getPartitionKeys: Partition Data: ", data)
+	fmt.Println(finalQuery)
 	return data, nil
 }
 
 func getColumnMetadata(nameSpaceName string, tableName string) ([]column, error) {
 	query := fmt.Sprintf(`SELECT * FROM system_schema.columns where keyspace_name='%s' and table_name = '%s'`, nameSpaceName, tableName)
+	fmt.Println(query)
 	data, err := executeQuery(session, query)
 	if err != nil {
 		return nil, err
@@ -77,11 +106,15 @@ func createSourceTableQuery(config tableConfig, partitionColumns []column) strin
 	for colName, _ := range config.ColumnMapping {
 		for _, pcol := range partitionColumns {
 			if pcol.Name == colName {
+				fmt.Println(colName, " ", pcol.Name)
 				if wherePart != "" {
-					wherePart = fmt.Sprintf(" and %s = $%s ,", pcol.Name, colName)
+					wherePart = fmt.Sprintf("%s and %s = $%s ", wherePart, pcol.Name, colName)
+					break
 
 				}
 				wherePart = fmt.Sprintf(" where %s = $%s", pcol.Name, colName)
+				break
+
 			}
 		}
 
@@ -93,6 +126,7 @@ func createSourceTableQuery(config tableConfig, partitionColumns []column) strin
 	}
 
 	query := fmt.Sprintf("%s %s %s", selectPart, tablePart, wherePart)
+	fmt.Println(query)
 	return query
 }
 
@@ -107,7 +141,7 @@ func createDestinationTableQuery(config tableConfig, partitionColumns []column) 
 			tocontinue = false
 			if pcol.Name == colName {
 				if wherePart != "" {
-					wherePart = fmt.Sprintf(" and %s = $%s ,", pcol.Name, sourceColName)
+					wherePart = fmt.Sprintf(" %s and %s = $%s ", wherePart, pcol.Name, sourceColName)
 					tocontinue = true
 					break
 				}
@@ -138,7 +172,8 @@ func createDestinationTableQuery(config tableConfig, partitionColumns []column) 
 	return query
 }
 
-func getSourceTableData(session *gocql.Session, selectQuery string, partCol column, partitionValue interface{}) ([]map[string]interface{}, error) {
+func getSourceTableData1(session *gocql.Session, selectQuery string, partCol column, partitionValue interface{}) ([]map[string]interface{}, error) {
+
 	finalQuery, err := replaceQueryColNames(selectQuery, partCol, partitionValue)
 	if err != nil {
 		return nil, err
@@ -153,6 +188,23 @@ func getSourceTableData(session *gocql.Session, selectQuery string, partCol colu
 	// }
 
 	return executeQuery(session, finalQuery)
+
+}
+
+func getSourceTableData(session *gocql.Session, selectQuery string, partCols []column, colList map[string]interface{}) ([]map[string]interface{}, error) {
+	var err error
+	for _, partCol := range partCols {
+		if colList[partCol.Name] != nil {
+			selectQuery, err = replaceQueryColNames(selectQuery, partCol, colList[partCol.Name])
+
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	fmt.Println(selectQuery)
+
+	return executeQuery(session, selectQuery)
 
 }
 
