@@ -72,12 +72,12 @@ func main() {
 	log.Println("DestinationKeySpace: ", destKeySpace)
 	log.Println("DestinationTable: ", destTable)
 
-	log.Println("Fetching Clustering Key")
-	sourceclusteringColumn := getClusterColumn(sourceTableMetadata)
-	log.Println("Cluster Columns for Source table: ", sourceTable, ", is: ", sourceclusteringColumn)
+	// log.Println("Fetching Clustering Key")
+	// sourceclusteringColumn := getClusterColumn(sourceTableMetadata)
+	// log.Println("Cluster Columns for Source table: ", sourceTable, ", is: ", sourceclusteringColumn)
 
-	destclusteringColumn := getClusterColumn(destTableMetadata)
-	log.Println("Cluster Columns for Destination table: ", destTable, ", is: ", destclusteringColumn)
+	// destclusteringColumn := getClusterColumn(destTableMetadata)
+	// log.Println("Cluster Columns for Destination table: ", destTable, ", is: ", destclusteringColumn)
 
 	sourceSelectQuery := createSourceTableQuery(config, sourceTablePartitionColumns)
 	log.Println(sourceSelectQuery)
