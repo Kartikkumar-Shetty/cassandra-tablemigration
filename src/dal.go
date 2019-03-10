@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"reflect"
 	"strings"
+	"time"
 
 	"github.com/gocql/gocql"
 )
@@ -39,7 +41,7 @@ func getPartitionKeys(nameSpaceName string, tableName string, col column) ([]map
 		return nil, err
 	}
 	log.Println("getPartitionKeys: Partition Data: ", data)
-	fmt.Println(query)
+
 	return data, nil
 }
 
@@ -53,49 +55,111 @@ func getMultiColumnPartitionKeys(nameSpaceName string, tableName string, cols []
 		}
 		colList = fmt.Sprintf(`%s, "%s"`, colList, col.Name)
 	}
-	fmt.Println(colList)
+
 	selectQuery := fmt.Sprintf(`SELECT distinct %s FROM %s.%s `, colList, nameSpaceName, tableName)
 
 	wherePart = fmt.Sprintf(` where Token(%s)>= -9223372036854775808 and Token(%s) <= 9223372036854775807`, colList, colList)
 
 	finalQuery := fmt.Sprintf("%s %s", selectQuery, wherePart)
-	fmt.Println(finalQuery)
+
 	data, err := executeQuery(session, finalQuery)
 	if err != nil {
 		log.Println("getPartitionKeys: Error: ", err)
 		return nil, err
 	}
 	log.Println("getPartitionKeys: Partition Data: ", data)
-	fmt.Println(finalQuery)
+
 	return data, nil
 }
 
 func getColumnMetadata(nameSpaceName string, tableName string) ([]column, error) {
 	query := fmt.Sprintf(`SELECT * FROM system_schema.columns where keyspace_name='%s' and table_name = '%s'`, nameSpaceName, tableName)
-	fmt.Println(query)
+
 	data, err := executeQuery(session, query)
 	if err != nil {
 		return nil, err
 	}
 
-	columns := translateData(data)
+	columns, err := translateData(data, nameSpaceName, tableName)
+	if err != nil {
+		return nil, err
+	}
+
 	return columns, nil
 
 }
 
-func translateData(data []map[string]interface{}) []column {
+func translateData(data []map[string]interface{}, namespaceName, tableName string) ([]column, error) {
 	var columns []column
 	for i := 0; i < len(data); i++ {
-		col := column{
-			Name:            ToString(data[i]["column_name"]),
-			ClusterSequence: ToInt(data[i]["position"]),
-			Datatype:        ToString(data[i]["type"]),
-			Kind:            ToString(data[i]["kind"]),
+		isUDT := checkIfUDT(ToString(data[i]["type"]))
+		if isUDT {
+			cols, err := getTypes(namespaceName, ToString(data[i]["type"]), ToString(data[i]["column_name"]))
+			if err != nil {
+				return nil, err
+			}
+			columns = append(columns, cols...)
+		} else {
+			col := column{
+				Name:            ToString(data[i]["column_name"]),
+				ClusterSequence: ToInt(data[i]["position"]),
+				Datatype:        ToString(data[i]["type"]),
+				Kind:            ToString(data[i]["kind"]),
+			}
+			columns = append(columns, col)
 		}
 
-		columns = append(columns, col)
 	}
-	return columns
+	return columns, nil
+}
+
+func getTypes(nameSpaceName string, typeName string, columnName string) ([]column, error) {
+	query := fmt.Sprintf(`SELECT * FROM system_schema.types where keyspace_name='%s' and type_name = '%s'`, nameSpaceName, typeName)
+	data, err := executeQuery(session, query)
+	if err != nil {
+		return nil, err
+	}
+
+	columns, err := translateTypesToColumns(data, nameSpaceName, columnName)
+	if err != nil {
+		return nil, err
+	}
+	return columns, nil
+}
+
+func translateTypesToColumns(data []map[string]interface{}, nameSpaceName, columnName string) ([]column, error) {
+	var columns []column
+	for _, row := range data {
+		fields := row["field_names"].([]string)
+		types := row["field_types"].([]string)
+		for index, fieldName := range fields {
+			if checkIfUDT(types[index]) {
+				cols, err := getTypes(nameSpaceName, ToString(types[index]), fmt.Sprintf("%s.%s", columnName, fieldName))
+				if err != nil {
+					return nil, err
+				}
+				columns = append(columns, cols...)
+			} else {
+				col := column{
+					Name:            fmt.Sprintf("%s.%s", columnName, fieldName),
+					ClusterSequence: -1,
+					Datatype:        ToString(types[index]),
+					Kind:            "",
+				}
+
+				columns = append(columns, col)
+			}
+		}
+	}
+	return columns, nil
+}
+
+func checkIfUDT(typename string) bool {
+	switch strings.ToLower(typename) {
+	case "ascii", "bigint", "blob", "boolean", "counter", "decimal", "double", "float", "inet", "int", "text", "timestamp", "timeuuid", "uuid", "varchar", "varint":
+		return false
+	}
+	return true
 }
 
 func createSourceTableQuery(config tableConfig, partitionColumns []column) string {
@@ -106,7 +170,7 @@ func createSourceTableQuery(config tableConfig, partitionColumns []column) strin
 	for colName, _ := range config.ColumnMapping {
 		for _, pcol := range partitionColumns {
 			if pcol.Name == colName {
-				fmt.Println(colName, " ", pcol.Name)
+
 				if wherePart != "" {
 					wherePart = fmt.Sprintf("%s and %s = $%s ", wherePart, pcol.Name, colName)
 					break
@@ -114,19 +178,16 @@ func createSourceTableQuery(config tableConfig, partitionColumns []column) strin
 				}
 				wherePart = fmt.Sprintf(" where %s = $%s", pcol.Name, colName)
 				break
-
 			}
 		}
-
 		if selectPart != "" {
 			selectPart = fmt.Sprintf("%s, %s", selectPart, colName)
 			continue
 		}
 		selectPart = fmt.Sprintf("select %s", colName)
 	}
-
 	query := fmt.Sprintf("%s %s %s", selectPart, tablePart, wherePart)
-	fmt.Println(query)
+
 	return query
 }
 
@@ -202,7 +263,6 @@ func getSourceTableData(session *gocql.Session, selectQuery string, partCols []c
 			}
 		}
 	}
-	fmt.Println(selectQuery)
 
 	return executeQuery(session, selectQuery)
 
@@ -217,8 +277,10 @@ func replaceQueryColNames(query string, col column, value interface{}) (string, 
 		finalQuery = strings.Replace(query, fmt.Sprint("$", col.Name), fmt.Sprint("'", value.(string), "'"), -1)
 	case nil:
 		finalQuery = strings.Replace(query, fmt.Sprint("$", col.Name), "nil", -1)
+	case time.Time:
+		finalQuery = strings.Replace(query, fmt.Sprint("$", col.Name), fmt.Sprint("'", value.(time.Time).Format("2006-01-02 15:04:05"), "'"), -1)
 	default:
-		return "", fmt.Errorf("Unkown DataType for Partition Column, Data: %v", t)
+		return "", fmt.Errorf("Unkown DataType for Partition Column, Data: %v", t, "; DataType:", reflect.TypeOf(t))
 	}
 	return finalQuery, nil
 }
@@ -229,6 +291,7 @@ func insertDestData(session *gocql.Session, insertQuery string, data []map[strin
 	for _, v := range data {
 		finalQuery = insertQuery
 		for _, col := range sourceTableCols {
+
 			finalQuery, err = replaceQueryColNames(finalQuery, col, v[col.Name])
 			if err != nil {
 				return err
